@@ -42,12 +42,6 @@ __FBSDID("$FreeBSD$");
 #define	AMD64_JMP32	0xe9
 #define	AMD64_NOP	0x90
 
-struct symtab_data {
-	Elf_Data	*data;
-	int		*entries;
-	int		ndata;
-};
-
 static GElf_Sym	*symlookup(Elf_Data *, int);
 static int	process_rel(Elf *, GElf_Ehdr *, GElf_Shdr *, Elf_Data *,
 		    uint8_t *, GElf_Addr, GElf_Xword *);
@@ -61,7 +55,8 @@ static GElf_Sym *
 symlookup(Elf_Data *symtab, int ndx)
 {
 
-	/* XXX bounds checking */
+	if (symtab->d_size < (ndx + 1) * sizeof(GElf_Sym))
+		errx(1, "invalid symbol index %d", ndx);
 	return (&((GElf_Sym *)symtab->d_buf)[ndx]);
 }
 
@@ -80,10 +75,17 @@ process_rel(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *symhdr, Elf_Data *symtab,
 	if (symname == NULL)
 		errx(1, "elf_strptr: %s", elf_errmsg(elf_errno()));
 
-	/* XXX sanity check on symbol type (should be global func) */
 	if (strncmp(symname, probe_prefix, sizeof(probe_prefix) - 1) != 0)
 		/* We're not interested in this relocation. */
 		return (1);
+
+	/* Sanity checks. */
+	if (GELF_ST_TYPE(sym->st_info) != STT_NOTYPE)
+		errx(1, "unexpected symbol type %d for %s",
+		    GELF_ST_TYPE(sym->st_info), symname);
+	if (GELF_ST_BIND(sym->st_info) != STB_GLOBAL)
+		errx(1, "unexpected binding %d for %s",
+		    GELF_ST_BIND(sym->st_info), symname);
 
 	/* XXX only want to update text... */
 
