@@ -1,3 +1,14 @@
-This is a program which fixes up SDT probe relocations.
+This is a program which fixes up SDT probe relocations. It's intended for use
+with the FreeBSD kernel.
 
-It runs only on ELF files of type ET_REL.
+It runs only on relocatable object files. For each such file specified in the
+arguments, sdtconvert scans the text relocations and overwrites all calls to
+DTrace probe stubs with nops. Each such relocation is recorded in a dedicated
+ELF section (similar to the linker sets used to store other probe info), and
+we also update the relocation so that it ends up being ignored by the linker.
+In particular, this program should process all object files that are to be
+linked into the kernel.
+
+When a probe is enabled, the nops are overwritten with a call to dtrace_probe().
+This is done by the kernel, using the ELF section mentioned in the paragraph
+above.
