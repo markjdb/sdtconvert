@@ -27,6 +27,7 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include <assert.h>
 #include <err.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -34,31 +35,162 @@ __FBSDID("$FreeBSD$");
 #include <string.h>
 #include <unistd.h>
 
-#include <libelf.h>
 #include <gelf.h>
+#include <libelf.h>
+
+#define	AMD64_CALL	0xe8
+#define	AMD64_JMP32	0xe9
+#define	AMD64_NOP	0x90
+
+struct symtab_data {
+	Elf_Data	*data;
+	int		*entries;
+	int		ndata;
+};
+
+static GElf_Sym	*symlookup(Elf_Data *, int);
+static int	process_rel(Elf *, GElf_Ehdr *, GElf_Shdr *, Elf_Data *,
+		    uint8_t *, GElf_Addr, GElf_Xword *, GElf_Sword);
+static void	process_reloc_scn(Elf *, GElf_Ehdr *, GElf_Shdr *, Elf_Scn *);
+static void	process_obj(const char *);
+static void	usage(void);
 
 const char probe_prefix[] = "__dtrace_probe_";
 
-static void
-process_sym(Elf *e, GElf_Shdr *shdr, Elf_Data *data, int ndx, GElf_Sym *sym)
+static GElf_Sym *
+symlookup(Elf_Data *symtab, int ndx)
 {
-	const char *symname;
 
-	symname = elf_strptr(e, shdr->sh_link, sym->st_name);
+	/* XXX bounds checking */
+	return (&((GElf_Sym *)symtab->d_buf)[ndx]);
+}
 
+/* XXX need obj filename for better error messages. */
+/* XXX need to compose consecutive relocations. */
+static int
+process_rel(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *symhdr, Elf_Data *symtab,
+    uint8_t *target, GElf_Addr offset, GElf_Xword *info, GElf_Sword addend)
+{
+	GElf_Sym *sym;
+	char *symname;
+	uint32_t addr;
+	uint8_t opc;
+
+	sym = symlookup(symtab, GELF_R_SYM(*info));
+	symname = elf_strptr(e, symhdr->sh_link, sym->st_name);
+	if (symname == NULL)
+		errx(1, "elf_strptr: %s", elf_errmsg(elf_errno()));
+
+	/* XXX sanity check on symbol type (should be global func) */
 	if (strncmp(symname, probe_prefix, sizeof(probe_prefix) - 1) != 0)
-		return;
+		/* We're not interested in this relocation. */
+		return (1);
 
-	if (sym->st_shndx != SHN_UNDEF)
-		return;
+	/* XXX only want to update text... */
 
-	sym->st_other &= GELF_ST_VISIBILITY(0);
-	sym->st_other |= GELF_ST_VISIBILITY(STV_ELIMINATE);
-	sym->st_shndx = SHN_ABS;
 
-	if (gelf_update_sym(data, ndx, sym) == 0)
-		errx(1, "gelf_update_sym: updating %s: %s", symname,
+	switch (ehdr->e_machine) {
+	case EM_X86_64:
+		/* XXX sanity check on the relocation type? */
+#if 0
+		switch (GELF_R_TYPE(info)) {
+		case R_X86_64_64:
+		case R_X86_64_PC32:
+			break;
+		default:
+			errx(1, "unhandled relocation type %lu for %s",
+			    GELF_R_TYPE(info), symname);
+		}
+#endif
+		opc = target[offset - 1];
+		if (opc != AMD64_CALL && opc != AMD64_JMP32)
+			errx(1, "unexpected opcode 0x%x for %s at offset 0x%lx",
+			    opc, symname, offset);
+		addr = *(uint32_t *)&target[offset];
+		if (addr != 0)
+			errx(1, "unexpected addr 0x%x for %s at offset 0x%lx",
+			    addr, symname, offset);
+
+		/* Overwrite the call with NOPs. */
+		memset(&target[offset - 1], AMD64_NOP, 5);
+
+		/*
+		 * Set the relocation type to R_X86_64_NONE so that the linker
+		 * ignores it.
+		 */
+		*info &= ~GELF_R_TYPE(*info);
+		*info |= R_X86_64_NONE;
+		break;
+	default:
+		errx(1, "unhandled machine type 0x%x", ehdr->e_machine);
+	}
+
+	return (0);
+}
+
+static void
+process_reloc_scn(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *shdr, Elf_Scn *scn)
+{
+	GElf_Shdr symhdr;
+	GElf_Rel rel;
+	GElf_Rela rela;
+	Elf_Data *data, *symdata, *targdata;
+	Elf_Scn *symscn, *targ;
+	int i, ret;
+
+	targ = elf_getscn(e, shdr->sh_info);
+	if (targ == NULL)
+		errx(1, "failed to look up relocation section: %s",
 		    elf_errmsg(elf_errno()));
+	/* XXX multiple descriptors */
+	targdata = elf_getdata(targ, NULL);
+	if (targdata == NULL)
+		errx(1, "failed to look up target section data: %s",
+		    elf_errmsg(elf_errno()));
+
+	symscn = elf_getscn(e, shdr->sh_link);
+	if (symscn == NULL)
+		errx(1, "failed to look up symbol table: %s",
+		    elf_errmsg(elf_errno()));
+	if (gelf_getshdr(symscn, &symhdr) == NULL)
+		errx(1, "failed to look up symbol table header: %s",
+		    elf_errmsg(elf_errno()));
+
+	/* XXX handle multiple data descriptors */
+	symdata = elf_getdata(symscn, NULL);
+	if (symdata == NULL)
+		errx(1, "elf_getdata: %s", elf_errmsg(elf_errno()));
+
+	i = 0;
+	data = NULL;
+	while ((data = elf_getdata(scn, data)) != NULL) {
+		for (; i < shdr->sh_size / shdr->sh_entsize; i++) {
+			if (shdr->sh_type == SHT_REL) {
+				if (gelf_getrel(data, i, &rel) == NULL)
+					errx(1, "gelf_getrel: %s",
+					    elf_errmsg(elf_errno()));
+				ret = process_rel(e, ehdr, &symhdr, symdata,
+				    targdata->d_buf, rel.r_offset,
+				    &rel.r_info, 0);
+				if (ret == 0 &&
+				    gelf_update_rel(data, i, &rel) == 0)
+					errx(1, "gelf_update_rel: %s",
+					    elf_errmsg(elf_errno()));
+			} else {
+				assert(shdr->sh_type == SHT_RELA);
+				if (gelf_getrela(data, i, &rela) == NULL)
+					errx(1, "gelf_getrela: %s",
+					    elf_errmsg(elf_errno()));
+				ret = process_rel(e, ehdr, &symhdr, symdata,
+				    targdata->d_buf, rela.r_offset,
+				    &rela.r_info, rela.r_addend);
+				if (ret == 0 &&
+				    gelf_update_rela(data, i, &rela) == 0)
+					errx(1, "gelf_update_rela: %s",
+					    elf_errmsg(elf_errno()));
+			}
+		}
+	}
 }
 
 static void
@@ -66,11 +198,9 @@ process_obj(const char *obj)
 {
 	GElf_Ehdr ehdr;
 	GElf_Shdr shdr;
-	GElf_Sym sym;
-	Elf_Data *data;
 	Elf_Scn *scn;
 	Elf *e;
-	int fd, i;
+	int fd;
 
 	fd = open(obj, O_RDWR);
 	if (fd < 0)
@@ -92,18 +222,8 @@ process_obj(const char *obj)
 		if (gelf_getshdr(scn, &shdr) == NULL)
 			errx(1, "gelf_getshdr: %s", elf_errmsg(elf_errno()));
 
-		if (shdr.sh_type != SHT_DYNSYM && shdr.sh_type != SHT_SYMTAB)
-			continue;
-
-		data = NULL;
-		while ((data = elf_getdata(scn, data)) != NULL) {
-			for (i = 0; i < shdr.sh_size / shdr.sh_entsize; i++) {
-				if (gelf_getsym(data, i, &sym) == NULL)
-					errx(1, "gelf_getsym: %s",
-					    elf_errmsg(elf_errno()));
-				process_sym(e, &shdr, data, i, &sym);
-			}
-		}
+		if (shdr.sh_type == SHT_REL || shdr.sh_type == SHT_RELA)
+			process_reloc_scn(e, &ehdr, &shdr, scn);
 	}
 
 	if (elf_update(e, ELF_C_WRITE) == -1)
