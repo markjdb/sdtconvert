@@ -50,12 +50,12 @@ struct symtab_data {
 
 static GElf_Sym	*symlookup(Elf_Data *, int);
 static int	process_rel(Elf *, GElf_Ehdr *, GElf_Shdr *, Elf_Data *,
-		    uint8_t *, GElf_Addr, GElf_Xword *, GElf_Sword);
+		    uint8_t *, GElf_Addr, GElf_Xword *);
 static void	process_reloc_scn(Elf *, GElf_Ehdr *, GElf_Shdr *, Elf_Scn *);
 static void	process_obj(const char *);
 static void	usage(void);
 
-const char probe_prefix[] = "__dtrace_probe_";
+static const char probe_prefix[] = "__dtrace_probe_";
 
 static GElf_Sym *
 symlookup(Elf_Data *symtab, int ndx)
@@ -69,11 +69,10 @@ symlookup(Elf_Data *symtab, int ndx)
 /* XXX need to compose consecutive relocations. */
 static int
 process_rel(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *symhdr, Elf_Data *symtab,
-    uint8_t *target, GElf_Addr offset, GElf_Xword *info, GElf_Sword addend)
+    uint8_t *target, GElf_Addr offset, GElf_Xword *info)
 {
 	GElf_Sym *sym;
 	char *symname;
-	uint32_t addr;
 	uint8_t opc;
 
 	sym = symlookup(symtab, GELF_R_SYM(*info));
@@ -88,7 +87,6 @@ process_rel(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *symhdr, Elf_Data *symtab,
 
 	/* XXX only want to update text... */
 
-
 	switch (ehdr->e_machine) {
 	case EM_X86_64:
 		/* XXX sanity check on the relocation type? */
@@ -102,14 +100,17 @@ process_rel(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *symhdr, Elf_Data *symtab,
 			    GELF_R_TYPE(info), symname);
 		}
 #endif
+		/* Sanity checks. */
 		opc = target[offset - 1];
 		if (opc != AMD64_CALL && opc != AMD64_JMP32)
 			errx(1, "unexpected opcode 0x%x for %s at offset 0x%lx",
 			    opc, symname, offset);
-		addr = *(uint32_t *)&target[offset];
-		if (addr != 0)
-			errx(1, "unexpected addr 0x%x for %s at offset 0x%lx",
-			    addr, symname, offset);
+		if (target[offset + 0] != 0 ||
+		    target[offset + 1] != 0 ||
+		    target[offset + 2] != 0 ||
+		    target[offset + 3] != 0)
+			errx(1, "unexpected addr for %s at offset 0x%lx",
+			    symname, offset);
 
 		/* Overwrite the call with NOPs. */
 		memset(&target[offset - 1], AMD64_NOP, 5);
@@ -136,7 +137,8 @@ process_reloc_scn(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *shdr, Elf_Scn *scn)
 	GElf_Rela rela;
 	Elf_Data *data, *symdata, *targdata;
 	Elf_Scn *symscn, *targ;
-	int i, ret;
+	u_int i;
+	int ret;
 
 	targ = elf_getscn(e, shdr->sh_info);
 	if (targ == NULL)
@@ -171,7 +173,7 @@ process_reloc_scn(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *shdr, Elf_Scn *scn)
 					    elf_errmsg(elf_errno()));
 				ret = process_rel(e, ehdr, &symhdr, symdata,
 				    targdata->d_buf, rel.r_offset,
-				    &rel.r_info, 0);
+				    &rel.r_info);
 				if (ret == 0 &&
 				    gelf_update_rel(data, i, &rel) == 0)
 					errx(1, "gelf_update_rel: %s",
@@ -183,7 +185,7 @@ process_reloc_scn(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *shdr, Elf_Scn *scn)
 					    elf_errmsg(elf_errno()));
 				ret = process_rel(e, ehdr, &symhdr, symdata,
 				    targdata->d_buf, rela.r_offset,
-				    &rela.r_info, rela.r_addend);
+				    &rela.r_info);
 				if (ret == 0 &&
 				    gelf_update_rela(data, i, &rela) == 0)
 					errx(1, "gelf_update_rela: %s",
