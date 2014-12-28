@@ -12,3 +12,6 @@ linked into the kernel.
 When a probe is enabled, the nops are overwritten with a call to dtrace_probe().
 This is done by the kernel, using the ELF section mentioned in the paragraph
 above.
+
+Todo:
+- Support cross-compilation. Some of the current uses of gelf(3) prevent this.
