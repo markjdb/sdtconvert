@@ -27,6 +27,7 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include <sys/sdt.h>
 #include <sys/queue.h>
 
 #include <assert.h>
@@ -71,8 +72,10 @@ static int	process_rel(Elf *, GElf_Ehdr *, GElf_Shdr *, Elf_Data *,
 static void	process_reloc_scn(Elf *, GElf_Ehdr *, GElf_Shdr *, Elf_Scn *,
 		    struct probe_list *);
 static void	process_obj(const char *);
-static void	record_instance(Elf *, Elf_Scn *, struct probe_instance *);
+static void	record_instance(Elf *, Elf_Scn *, Elf_Scn *,
+		    struct probe_instance *);
 static void	usage(void);
+static void *	xmalloc(size_t);
 
 static GElf_Sym *
 symlookup(Elf_Data *symtab, int ndx)
@@ -81,6 +84,17 @@ symlookup(Elf_Data *symtab, int ndx)
 	if (symtab->d_size < (ndx + 1) * sizeof(GElf_Sym))
 		errx(1, "invalid symbol index %d", ndx);
 	return (&((GElf_Sym *)symtab->d_buf)[ndx]);
+}
+
+static void *
+xmalloc(size_t n)
+{
+	void *ret;
+
+	ret = malloc(n);
+	if (ret == NULL)
+		errx(1, "malloc");
+	return (ret);
 }
 
 /* XXX need obj filename for better error messages. */
@@ -156,9 +170,7 @@ process_rel(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *symhdr, Elf_Data *symtab,
 
 	LOG("updated relocation for %s at 0x%lx", symname, offset - 1);
 
-	inst = malloc(sizeof(*inst));
-	if (inst == NULL)
-		err(1, "malloc");
+	inst = xmalloc(sizeof(*inst));
 	inst->symname = symname;
 	inst->offset = offset;
 	SLIST_INSERT_HEAD(plist, inst, next);
@@ -260,15 +272,15 @@ add_section(Elf *e, const char *name)
 
 	len = strlen(name) + 1;
 	newstrdata->d_align = strdata->d_align;
-	if ((newstrdata->d_buf = malloc(len)) == NULL)
-		err(1, "malloc");
+	newstrdata->d_buf = xmalloc(len);
 	memcpy(newstrdata->d_buf, name, len);
 	newstrdata->d_size = len;
 	newstrdata->d_type = strdata->d_type;
-	newstrdata->d_version = strdata->d_version;
+	newstrdata->d_version = elf_version(EV_CURRENT);
 
 	strshdr.sh_size += len;
 
+	/* Then create the actual section. */
 	if ((newscn = elf_newscn(e)) == NULL)
 		errx(1, "elf_newscn: %s", ELF_ERR());
 	if (gelf_getshdr(newscn, &newshdr) != &newshdr)
@@ -296,7 +308,7 @@ process_obj(const char *obj)
 	GElf_Ehdr ehdr;
 	GElf_Shdr shdr;
 	struct probe_instance *inst, *tmp;
-	Elf_Scn *scn, *instscn;
+	Elf_Scn *scn, *instscn, *instrelscn;
 	Elf *e;
 	int fd;
 
@@ -334,9 +346,10 @@ process_obj(const char *obj)
 	}
 
 	instscn = add_section(e, "set_sdt_instance_set");
+	instrelscn = add_section(e, ".relaset_sdt_instance_set");
 
 	SLIST_FOREACH_SAFE(inst, &plist, next, tmp) {
-		record_instance(e, instscn, inst);
+		record_instance(e, instscn, instrelscn, inst);
 		SLIST_REMOVE(&plist, inst, probe_instance, next);
 		free(inst);
 	}
@@ -349,11 +362,26 @@ process_obj(const char *obj)
 }
 
 static void
-record_instance(Elf *e, Elf_Scn *instscn, struct probe_instance *inst)
+record_instance(Elf *e __unused, Elf_Scn *instscn, Elf_Scn *instrelscn __unused,
+    struct probe_instance *inst)
 {
-	(void)e;
-	(void)instscn;
-	(void)inst;
+	struct sdt_instance sdtinst;
+	Elf_Data *data;
+	size_t sz;
+
+	if ((data = elf_newdata(instscn)) == NULL)
+		errx(1, "elf_newdata: %s", ELF_ERR());
+
+	sz = sizeof(sdtinst);
+	sdtinst.probe = NULL; /* Filled in with a relocation. */
+	sdtinst.offset = inst->offset;
+
+	data->d_align = 1;
+	data->d_buf = xmalloc(sz);
+	memcpy(data->d_buf, &sdtinst, sz);
+	data->d_size = sz;
+	data->d_type = ELF_T_BYTE;
+	data->d_version = elf_version(EV_CURRENT);
 }
 
 static void
