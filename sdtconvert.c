@@ -41,6 +41,7 @@ __FBSDID("$FreeBSD$");
 #define	AMD64_CALL	0xe8
 #define	AMD64_JMP32	0xe9
 #define	AMD64_NOP	0x90
+#define	AMD64_RETQ	0xc3
 
 static GElf_Sym	*symlookup(Elf_Data *, int);
 static int	process_rel(Elf *, GElf_Ehdr *, GElf_Shdr *, Elf_Data *,
@@ -117,6 +118,10 @@ process_rel(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *symhdr, Elf_Data *symtab,
 		/* Overwrite the call with NOPs. */
 		memset(&target[offset - 1], AMD64_NOP, 5);
 
+		/* If this was a tail call, we need to return instead. */
+		if (opc == AMD64_JMP32)
+			target[offset - 1] = AMD64_RETQ;
+
 		/*
 		 * Set the relocation type to R_X86_64_NONE so that the linker
 		 * ignores it.
@@ -174,8 +179,7 @@ process_reloc_scn(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *shdr, Elf_Scn *scn)
 					errx(1, "gelf_getrel: %s",
 					    elf_errmsg(elf_errno()));
 				ret = process_rel(e, ehdr, &symhdr, symdata,
-				    targdata->d_buf, rel.r_offset,
-				    &rel.r_info);
+				    targdata->d_buf, rel.r_offset, &rel.r_info);
 				if (ret == 0 &&
 				    gelf_update_rel(data, i, &rel) == 0)
 					errx(1, "gelf_update_rel: %s",
