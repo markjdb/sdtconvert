@@ -27,6 +27,7 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include <sys/types.h>
 #include <sys/sdt.h>
 #include <sys/queue.h>
 
@@ -54,6 +55,7 @@ __FBSDID("$FreeBSD$");
 #define	AMD64_RETQ	0xc3
 
 static const char probe_prefix[] = "__dtrace_probe_";
+static size_t prefixlen = sizeof(probe_prefix) - 1;
 
 static bool verbose = false;
 
@@ -65,16 +67,17 @@ struct probe_instance {
 
 SLIST_HEAD(probe_list, probe_instance);
 
-static Elf_Scn	*add_section(Elf *, const char *, uint64_t, uint64_t);
-static const char *section_name(Elf *, Elf_Scn *);
-static GElf_Sym	*symlookup(Elf_Data *, int);
-static int	process_rel(Elf *, GElf_Ehdr *, GElf_Shdr *, Elf_Data *,
+static Elf_Scn *add_section(Elf *, const char *, uint64_t, uint64_t);
+static const char *get_scn_name(Elf *, Elf_Scn *);
+static int	process_rel(Elf *, GElf_Ehdr *, GElf_Shdr *, Elf_Scn *,
 		    uint8_t *, GElf_Addr, GElf_Xword *, struct probe_list *);
 static void	process_reloc_scn(Elf *, GElf_Ehdr *, GElf_Shdr *, Elf_Scn *,
 		    struct probe_list *);
 static void	process_obj(const char *);
-static void	record_instance(Elf *, Elf_Scn *, Elf_Scn *,
+static void	record_instance(Elf *, GElf_Ehdr *, Elf_Scn *, Elf_Scn *,
 		    struct probe_instance *);
+static Elf_Scn *section_by_name(Elf *, const char *);
+static GElf_Sym	*symlookup(Elf_Scn *, int);
 static void	usage(void);
 static void *	xmalloc(size_t);
 
@@ -130,7 +133,7 @@ add_section(Elf *e, const char *name, uint64_t type, uint64_t flags)
 }
 
 static const char *
-section_name(Elf *e, Elf_Scn *scn)
+get_scn_name(Elf *e, Elf_Scn *scn)
 {
 	GElf_Shdr shdr;
 	size_t ndx;
@@ -142,18 +145,9 @@ section_name(Elf *e, Elf_Scn *scn)
 	return (elf_strptr(e, ndx, shdr.sh_name));
 }
 
-static GElf_Sym *
-symlookup(Elf_Data *symtab, int ndx)
-{
-
-	if (symtab->d_size < (ndx + 1) * sizeof(GElf_Sym))
-		errx(1, "invalid symbol index %d", ndx);
-	return (&((GElf_Sym *)symtab->d_buf)[ndx]);
-}
-
-/* XXX need obj filename for better error messages. */
+/* XXX need current obj filename for better error messages. */
 static int
-process_rel(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *symshdr, Elf_Data *symtab,
+process_rel(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *symshdr, Elf_Scn *symtab,
     uint8_t *target, GElf_Addr offset, GElf_Xword *info,
     struct probe_list *plist)
 {
@@ -167,7 +161,7 @@ process_rel(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *symshdr, Elf_Data *symtab,
 	if (symname == NULL)
 		errx(1, "elf_strptr: %s", ELF_ERR());
 
-	if (strncmp(symname, probe_prefix, sizeof(probe_prefix) - 1) != 0)
+	if (strncmp(symname, probe_prefix, prefixlen) != 0)
 		/* We're not interested in this relocation. */
 		return (1);
 
@@ -181,15 +175,6 @@ process_rel(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *symshdr, Elf_Data *symtab,
 
 	switch (ehdr->e_machine) {
 	case EM_X86_64:
-		switch (GELF_R_TYPE(*info)) {
-		case R_X86_64_64:
-		case R_X86_64_PC32:
-			break;
-		default:
-			errx(1, "unexpected relocation type %lu for %s",
-			    GELF_R_TYPE(*info), symname);
-		}
-
 		/* Sanity checks. */
 		opc = target[offset - 1];
 		if (opc != AMD64_CALL && opc != AMD64_JMP32)
@@ -237,44 +222,36 @@ process_reloc_scn(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *shdr, Elf_Scn *scn,
 	GElf_Shdr symshdr;
 	GElf_Rel rel;
 	GElf_Rela rela;
-	Elf_Data *reldata, *symdata, *targdata;
+	Elf_Data *reldata, *targdata;
 	Elf_Scn *symscn, *targscn;
 	const char *name;
 	u_int i;
 	int ret;
 
-	targscn = elf_getscn(e, shdr->sh_info);
-	if (targscn == NULL)
+	if ((targscn = elf_getscn(e, shdr->sh_info)) == NULL)
 		errx(1, "failed to look up relocation section: %s", ELF_ERR());
-	targdata = elf_getdata(targscn, NULL);
-	if (targdata == NULL)
+	if ((targdata = elf_getdata(targscn, NULL)) == NULL)
 		errx(1, "failed to look up target section data: %s", ELF_ERR());
 
 	/* We only want to process text relocations. */
-	name = section_name(e, targscn);
+	name = get_scn_name(e, targscn);
 	if (strcmp(name, ".text") != 0) {
 		LOG("skipping relocation section for %s", name);
 		return;
 	}
 
-	symscn = elf_getscn(e, shdr->sh_link);
-	if (symscn == NULL)
+	if ((symscn = elf_getscn(e, shdr->sh_link)) == NULL)
 		errx(1, "failed to look up symbol table: %s", ELF_ERR());
 	if (gelf_getshdr(symscn, &symshdr) == NULL)
 		errx(1, "failed to look up symbol table header: %s", ELF_ERR());
 
-	symdata = elf_getdata(symscn, NULL);
-	if (symdata == NULL)
-		errx(1, "elf_getdata: %s", ELF_ERR());
-
 	i = 0;
-	reldata = NULL;
-	while ((reldata = elf_getdata(scn, reldata)) != NULL) {
+	for (reldata = NULL; (reldata = elf_getdata(scn, reldata)) != NULL; ) {
 		for (; i < shdr->sh_size / shdr->sh_entsize; i++) {
 			if (shdr->sh_type == SHT_REL) {
 				if (gelf_getrel(reldata, i, &rel) == NULL)
 					errx(1, "gelf_getrel: %s", ELF_ERR());
-				ret = process_rel(e, ehdr, &symshdr, symdata,
+				ret = process_rel(e, ehdr, &symshdr, symscn,
 				    targdata->d_buf, rel.r_offset, &rel.r_info,
 				    plist);
 				if (ret == 0 &&
@@ -285,7 +262,7 @@ process_reloc_scn(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *shdr, Elf_Scn *scn,
 				assert(shdr->sh_type == SHT_RELA);
 				if (gelf_getrela(reldata, i, &rela) == NULL)
 					errx(1, "gelf_getrela: %s", ELF_ERR());
-				ret = process_rel(e, ehdr, &symshdr, symdata,
+				ret = process_rel(e, ehdr, &symshdr, symscn,
 				    targdata->d_buf, rela.r_offset,
 				    &rela.r_info, plist);
 				if (ret == 0 &&
@@ -321,12 +298,10 @@ process_obj(const char *obj)
 	Elf *e;
 	int fd;
 
-	fd = open(obj, O_RDWR);
-	if (fd < 0)
+	if ((fd = open(obj, O_RDWR)) < 0)
 		err(1, "failed to open %s", obj);
 
-	e = elf_begin(fd, ELF_C_RDWR, NULL);
-	if (e == NULL)
+	if ((e = elf_begin(fd, ELF_C_RDWR, NULL)) == NULL)
 		errx(1, "elf_begin: %s", ELF_ERR());
 
 	if (gelf_getehdr(e, &ehdr) == NULL)
@@ -339,8 +314,7 @@ process_obj(const char *obj)
 	SLIST_INIT(&plist);
 
 	/* Perform relocations for DTrace probe stub calls. */
-	scn = NULL;
-	while ((scn = elf_nextscn(e, scn)) != NULL) {
+	for (scn = NULL; (scn = elf_nextscn(e, scn)) != NULL; ) {
 		if (gelf_getshdr(scn, &shdr) == NULL)
 			errx(1, "gelf_getshdr: %s", ELF_ERR());
 
@@ -349,16 +323,18 @@ process_obj(const char *obj)
 	}
 
 	if (SLIST_EMPTY(&plist)) {
+		/* No probe instances in this object file, we're done. */
 		LOG("no probes found in %s", obj);
 		return;
 	}
 
+	/* Now record all of the instance sites. */
 	instscn = add_section(e, "set_sdt_instance_set", SHT_PROGBITS,
 	    SHF_ALLOC);
 	instrelscn = add_section(e, ".relaset_sdt_instance_set", SHT_RELA, 0);
 
 	SLIST_FOREACH_SAFE(inst, &plist, next, tmp) {
-		record_instance(e, instscn, instrelscn, inst);
+		record_instance(e, &ehdr, instscn, instrelscn, inst);
 		SLIST_REMOVE(&plist, inst, probe_instance, next);
 		free(inst);
 	}
@@ -371,26 +347,135 @@ process_obj(const char *obj)
 }
 
 static void
-record_instance(Elf *e __unused, Elf_Scn *instscn, Elf_Scn *instrelscn __unused,
-    struct probe_instance *inst)
+record_instance(Elf *e __unused, GElf_Ehdr *ehdr __unused, Elf_Scn *instscn,
+    Elf_Scn *relscn __unused, struct probe_instance *inst)
 {
+	GElf_Rel rel;
+	GElf_Rela rela;
+	GElf_Shdr instshdr, proberelshdr, symshdr;
 	struct sdt_instance sdtinst;
-	Elf_Data *data;
+	Elf_Data *instdata, *probereldata;
+	Elf_Scn *probescn, *proberelscn, *symtab;
+	GElf_Sym *sym;
+	GElf_Addr offset;
+	GElf_Xword info;
+	const char *name;
 	size_t sz;
+	u_int i;
+	bool found;
 
-	if ((data = elf_newdata(instscn)) == NULL)
+	if ((instdata = elf_newdata(instscn)) == NULL)
 		errx(1, "elf_newdata: %s", ELF_ERR());
 
 	sz = sizeof(sdtinst);
 	sdtinst.probe = NULL; /* Filled in by the linker. */
 	sdtinst.offset = inst->offset;
 
-	data->d_align = 1;
-	data->d_buf = xmalloc(sz);
-	memcpy(data->d_buf, &sdtinst, sz);
-	data->d_size = sz;
-	data->d_type = ELF_T_BYTE;
-	data->d_version = elf_version(EV_CURRENT);
+	instdata->d_align = 1;
+	instdata->d_buf = xmalloc(sz);
+	memcpy(instdata->d_buf, &sdtinst, sz);
+	instdata->d_size = sz;
+	instdata->d_type = ELF_T_BYTE;
+	instdata->d_version = elf_version(EV_CURRENT);
+
+	if (gelf_getshdr(instscn, &instshdr) != &instshdr)
+		errx(1, "gelf_getshdr: %s", ELF_ERR());
+
+	instshdr.sh_size += sz;
+
+	/* XXX lift out of this function */
+	if ((probescn = section_by_name(e, "set_sdt_probes_set")) == NULL)
+		errx(1, "couldn't find SDT probe linker set");
+
+	/* Find the relocation section for the SDT probe linker set. */
+	for (proberelscn = NULL;
+	    (proberelscn = elf_nextscn(e, proberelscn)) != NULL; ) {
+		if (gelf_getshdr(proberelscn, &proberelshdr) == NULL)
+			errx(1, "gelf_getshdr: %s", ELF_ERR());
+
+		if ((proberelshdr.sh_type == SHT_REL ||
+		    proberelshdr.sh_type == SHT_RELA) &&
+		    proberelshdr.sh_info == elf_ndxscn(probescn)) {
+			symtab = elf_getscn(e, proberelshdr.sh_link);
+			if (symtab == NULL)
+				errx(1, "couldn't find symtab: %s", ELF_ERR());
+			if (gelf_getshdr(symtab, &symshdr) != &symshdr)
+				errx(1, "gelf_getshdr: %s", ELF_ERR());
+			break;
+		}
+	}
+	if (proberelscn == NULL)
+		errx(1, "couldn't find reloc section for SDT probe linker set");
+	found = false;
+	i = 0;
+	for (probereldata = NULL;
+	    (probereldata = elf_getdata(proberelscn, probereldata)) != NULL; ) {
+		for (; i < proberelshdr.sh_size / proberelshdr.sh_entsize; i++) {
+			if (proberelshdr.sh_type == SHT_REL) {
+				if (gelf_getrel(probereldata, i, &rel) == NULL)
+					errx(1, "gelf_getrel: %s", ELF_ERR());
+				info = rel.r_info;
+				offset = rel.r_offset;
+			} else {
+				assert(proberelshdr.sh_type == SHT_RELA);
+				if (gelf_getrela(probereldata, i, &rela) == NULL)
+					errx(1, "gelf_getrela: %s", ELF_ERR());
+				info = rela.r_info;
+				offset = rela.r_offset;
+			}
+
+			sym = symlookup(symtab, GELF_R_SYM(info));
+			name = elf_strptr(e, symshdr.sh_link, sym->st_name);
+
+			if (strlen(name) < prefixlen)
+				continue;
+			if (strcmp(name + strlen("sdt_"),
+			    inst->symname + prefixlen) == 0) {
+				found = true;
+				LOG("found relocation at 0x%lx for %s", offset,
+				    inst->symname);
+				break; /* There's my chippy. */
+			}
+		}
+	}
+
+	if (!found)
+		errx(1, "failed to find SDT probe relocation for %s",
+		    inst->symname);
+
+	/*
+	 * Now scan the SDT probe relocations for the symbol matching our probe
+	 * instance. A matching relocation tells us which SDT probe this
+	 * instance is associated with. This is a bit cumbersome...
+	 */
+
+	if (gelf_update_shdr(instscn, &instshdr) == 0)
+		errx(1, "gelf_update_shdr: %s", ELF_ERR());
+}
+
+/* Look up an ELF section by name. */
+static Elf_Scn *
+section_by_name(Elf *e, const char *name)
+{
+	Elf_Scn *scn;
+
+	for (scn = NULL; (scn = elf_nextscn(e, scn)) != NULL; )
+		if (strcmp(get_scn_name(e, scn), name) == 0)
+			return (scn);
+	return (NULL);
+}
+
+/* Retrieve the specified symbol, with bounds checking. */
+static GElf_Sym *
+symlookup(Elf_Scn *symtab, int ndx)
+{
+	Elf_Data *symdata;
+
+	if ((symdata = elf_getdata(symtab, NULL)) == NULL)
+		errx(1, "couldn't find symbol table data: %s", ELF_ERR());
+	if (symdata->d_size < (ndx + 1) * sizeof(GElf_Sym))
+		errx(1, "invalid symbol index %d", ndx);
+	return (&((GElf_Sym *)symdata->d_buf)[ndx]);
 }
 
 static void
