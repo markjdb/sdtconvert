@@ -73,7 +73,7 @@ static size_t	append_data(Elf *, Elf_Scn *, const void *, size_t);
 static size_t	expand_scn(Elf_Scn *, size_t);
 static const char *get_scn_name(Elf *, Elf_Scn *);
 static void	init_instance_scn(Elf *, Elf_Scn *, Elf_Scn **, Elf_Scn **,
-		    int);
+		    size_t);
 static int	process_rel(Elf *, GElf_Ehdr *, GElf_Shdr *, Elf_Scn *,
 		    uint8_t *, GElf_Addr, GElf_Xword *, struct probe_list *);
 static void	process_reloc_scn(Elf *, GElf_Ehdr *, GElf_Shdr *, Elf_Scn *,
@@ -183,7 +183,7 @@ get_scn_name(Elf *e, Elf_Scn *scn)
  */
 static void
 init_instance_scn(Elf *e, Elf_Scn *symscn, Elf_Scn **instscn,
-    Elf_Scn **instrelscn, int cnt)
+    Elf_Scn **instrelscn, size_t scnsz)
 {
 	GElf_Shdr instrelshdr;
 	Elf_Data *data;
@@ -214,7 +214,7 @@ init_instance_scn(Elf *e, Elf_Scn *symscn, Elf_Scn **instscn,
 
 	data->d_align = wordsize(e);
 	data->d_buf = xmalloc(data->d_size);
-	data->d_size = cnt * wordsize(e);
+	data->d_size = scnsz;
 	memset(data->d_buf, 0, data->d_size);
 
 	assert(expand_scn(*instscn, data->d_size) == 0);
@@ -415,7 +415,7 @@ process_obj(const char *obj)
 	cnt = 0;
 	SLIST_FOREACH(inst, &plist, next)
 	    cnt++;
-	init_instance_scn(e, symscn, &instscn, &instrelscn, cnt);
+	init_instance_scn(e, symscn, &instscn, &instrelscn, cnt * wordsize(e));
 
 	ndx = 0;
 	SLIST_FOREACH_SAFE(inst, &plist, next, tmp) {
