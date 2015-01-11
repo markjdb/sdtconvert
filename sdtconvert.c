@@ -58,7 +58,7 @@ __FBSDID("$FreeBSD$");
 #define	AMD64_RETQ	0xc3
 
 static const char probe_prefix[] = "__dtrace_probe_";
-static const char sdt_prefix[] = "sdt_";
+static const char sdtobj_prefix[] = "sdt_";
 static const char sdtinst_prefix[] = "sdt$";
 
 static bool verbose = false;
@@ -593,10 +593,10 @@ record_instance(Elf *e, GElf_Ehdr *ehdr, Elf_Scn *symscn, Elf_Scn *datascn,
 	 * If the probe name is "__dtrace_probe_<foo>", the probe object name is
 	 * "sdt_<foo>".
 	 */
-	namesz = strlen(sdt_prefix) + strlen(inst->symname) -
+	namesz = strlen(sdtobj_prefix) + strlen(inst->symname) -
 	    strlen(probe_prefix) + 1;
 	probeobjname = xmalloc(namesz);
-	(void)strlcpy(probeobjname, sdt_prefix, namesz);
+	(void)strlcpy(probeobjname, sdtobj_prefix, namesz);
 	(void)strlcat(probeobjname, inst->symname + strlen(probe_prefix),
 	    namesz);
 
