@@ -70,21 +70,21 @@ SLIST_HEAD(probe_list, probe_instance);
 
 static Elf_Scn *add_section(Elf *, const char *, uint64_t, uint64_t);
 static size_t	append_data(Elf *, Elf_Scn *, const void *, size_t);
-static size_t	expand_scn(Elf_Scn *, size_t);
-static const char *get_scn_name(Elf *, Elf_Scn *);
-static void	init_instance_scn(Elf *, Elf_Scn *, Elf_Scn **, Elf_Scn **,
+static size_t	expand_section(Elf_Scn *, size_t);
+static const char *get_section_name(Elf *, Elf_Scn *);
+static void	init_new_sections(Elf *, Elf_Scn *, Elf_Scn **, Elf_Scn **,
 		    size_t);
-static int	process_rel(Elf *, GElf_Ehdr *, GElf_Shdr *, Elf_Scn *,
+static int	process_reloc(Elf *, GElf_Ehdr *, GElf_Shdr *, Elf_Scn *,
 		    uint8_t *, GElf_Addr, GElf_Xword *, struct probe_list *);
-static void	process_reloc_scn(Elf *, GElf_Ehdr *, GElf_Shdr *, Elf_Scn *,
-		    struct probe_list *);
+static void	process_reloc_section(Elf *, GElf_Ehdr *, GElf_Shdr *,
+		    Elf_Scn *, struct probe_list *);
 static void	process_obj(const char *);
 static void	record_instance(Elf *, GElf_Ehdr *, Elf_Scn *, Elf_Scn *,
 		    Elf_Scn *, Elf_Scn *, const struct probe_instance *, int);
 static Elf_Scn *section_by_name(Elf *, const char *);
 static int	symbol_by_name(Elf *, Elf_Scn *, const char *, GElf_Sym *,
 		    uint64_t *);
-static GElf_Sym	*symlookup(Elf_Scn *, int);
+static GElf_Sym	*symbol_by_index(Elf_Scn *, int);
 static void	usage(void);
 static int	wordsize(Elf *);
 static void *	xmalloc(size_t);
@@ -136,10 +136,10 @@ append_data(Elf *e, Elf_Scn *scn, const void *data, size_t sz)
 
 	if (gelf_getshdr(scn, &shdr) != &shdr)
 		errx(1, "failed to get section header for %s: %s",
-		    get_scn_name(e, scn), ELF_ERR());
+		    get_section_name(e, scn), ELF_ERR());
 	if ((newdata = elf_newdata(scn)) == NULL)
 		errx(1, "failed to allocate new data descriptor for %s: %s",
-		    get_scn_name(e, scn), ELF_ERR());
+		    get_section_name(e, scn), ELF_ERR());
 
 	/* No need to set d_off since we let libelf handle the layout. */
 	newdata->d_align = shdr.sh_addralign;
@@ -147,12 +147,12 @@ append_data(Elf *e, Elf_Scn *scn, const void *data, size_t sz)
 	newdata->d_size = sz;
 	memcpy(newdata->d_buf, data, sz);
 
-	return (expand_scn(scn, sz));
+	return (expand_section(scn, sz));
 }
 
 /* Add sz bytes to the section size, returning the original size. */
 static size_t
-expand_scn(Elf_Scn *scn, size_t sz)
+expand_section(Elf_Scn *scn, size_t sz)
 {
 	GElf_Shdr shdr;
 
@@ -165,7 +165,7 @@ expand_scn(Elf_Scn *scn, size_t sz)
 }
 
 static const char *
-get_scn_name(Elf *e, Elf_Scn *scn)
+get_section_name(Elf *e, Elf_Scn *scn)
 {
 	GElf_Shdr shdr;
 	size_t ndx;
@@ -182,7 +182,7 @@ get_scn_name(Elf *e, Elf_Scn *scn)
  * create a relocation section for it.
  */
 static void
-init_instance_scn(Elf *e, Elf_Scn *symscn, Elf_Scn **instscn,
+init_new_sections(Elf *e, Elf_Scn *symscn, Elf_Scn **instscn,
     Elf_Scn **instrelscn, size_t scnsz)
 {
 	GElf_Shdr instrelshdr;
@@ -217,12 +217,12 @@ init_instance_scn(Elf *e, Elf_Scn *symscn, Elf_Scn **instscn,
 	data->d_size = scnsz;
 	memset(data->d_buf, 0, data->d_size);
 
-	assert(expand_scn(*instscn, data->d_size) == 0);
+	assert(expand_section(*instscn, data->d_size) == 0);
 }
 
 /* XXX need current obj filename for better error messages. */
 static int
-process_rel(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *symshdr, Elf_Scn *symtab,
+process_reloc(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *symshdr, Elf_Scn *symtab,
     uint8_t *target, GElf_Addr offset, GElf_Xword *info,
     struct probe_list *plist)
 {
@@ -231,7 +231,7 @@ process_rel(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *symshdr, Elf_Scn *symtab,
 	char *symname;
 	uint8_t opc;
 
-	sym = symlookup(symtab, GELF_R_SYM(*info));
+	sym = symbol_by_index(symtab, GELF_R_SYM(*info));
 	symname = elf_strptr(e, symshdr->sh_link, sym->st_name);
 	if (symname == NULL)
 		errx(1, "elf_strptr: %s", ELF_ERR());
@@ -289,7 +289,7 @@ process_rel(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *symshdr, Elf_Scn *symtab,
 }
 
 static void
-process_reloc_scn(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *shdr, Elf_Scn *scn,
+process_reloc_section(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *shdr, Elf_Scn *scn,
     struct probe_list *plist)
 {
 	GElf_Shdr symshdr;
@@ -307,7 +307,7 @@ process_reloc_scn(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *shdr, Elf_Scn *scn,
 		errx(1, "failed to look up target section data: %s", ELF_ERR());
 
 	/* We only want to process relocations against the text section. */
-	name = get_scn_name(e, targscn);
+	name = get_section_name(e, targscn);
 	if (strcmp(name, ".text") != 0) {
 		LOG("skipping relocation section for %s", name);
 		return;
@@ -324,7 +324,7 @@ process_reloc_scn(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *shdr, Elf_Scn *scn,
 			if (shdr->sh_type == SHT_REL) {
 				if (gelf_getrel(reldata, i, &rel) == NULL)
 					errx(1, "gelf_getrel: %s", ELF_ERR());
-				ret = process_rel(e, ehdr, &symshdr, symscn,
+				ret = process_reloc(e, ehdr, &symshdr, symscn,
 				    targdata->d_buf, rel.r_offset, &rel.r_info,
 				    plist);
 				if (ret == 0 &&
@@ -335,7 +335,7 @@ process_reloc_scn(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *shdr, Elf_Scn *scn,
 				assert(shdr->sh_type == SHT_RELA);
 				if (gelf_getrela(reldata, i, &rela) == NULL)
 					errx(1, "gelf_getrela: %s", ELF_ERR());
-				ret = process_rel(e, ehdr, &symshdr, symscn,
+				ret = process_reloc(e, ehdr, &symshdr, symscn,
 				    targdata->d_buf, rela.r_offset,
 				    &rela.r_info, plist);
 				if (ret == 0 &&
@@ -393,7 +393,7 @@ process_obj(const char *obj)
 			errx(1, "gelf_getshdr: %s", ELF_ERR());
 
 		if (shdr.sh_type == SHT_REL || shdr.sh_type == SHT_RELA)
-			process_reloc_scn(e, &ehdr, &shdr, scn, &plist);
+			process_reloc_section(e, &ehdr, &shdr, scn, &plist);
 	}
 
 	if (SLIST_EMPTY(&plist)) {
@@ -415,7 +415,7 @@ process_obj(const char *obj)
 	cnt = 0;
 	SLIST_FOREACH(inst, &plist, next)
 	    cnt++;
-	init_instance_scn(e, symscn, &instscn, &instrelscn, cnt * wordsize(e));
+	init_new_sections(e, symscn, &instscn, &instrelscn, cnt * wordsize(e));
 
 	ndx = 0;
 	SLIST_FOREACH_SAFE(inst, &plist, next, tmp) {
@@ -563,7 +563,7 @@ section_by_name(Elf *e, const char *name)
 	Elf_Scn *scn;
 
 	for (scn = NULL; (scn = elf_nextscn(e, scn)) != NULL; )
-		if (strcmp(get_scn_name(e, scn), name) == 0)
+		if (strcmp(get_section_name(e, scn), name) == 0)
 			return (scn);
 	return (NULL);
 }
@@ -599,9 +599,12 @@ symbol_by_name(Elf *e, Elf_Scn *scn, const char *symname, GElf_Sym *sym,
 	return (0);
 }
 
-/* Retrieve the specified symbol, with bounds checking. */
+/*
+ * Retrieve the symbol at index ndx in the specified symbol table, with bounds
+ * checking.
+ */
 static GElf_Sym *
-symlookup(Elf_Scn *symtab, int ndx)
+symbol_by_index(Elf_Scn *symtab, int ndx)
 {
 	Elf_Data *symdata;
 

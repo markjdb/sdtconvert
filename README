@@ -15,4 +15,3 @@ above.
 
 Todo:
 - Support cross-compilation. Some of the current uses of gelf(3) prevent this.
-- Fix inconsistent naming conventions (scn vs. section), etc.
