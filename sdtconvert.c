@@ -28,11 +28,13 @@
 __FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
-#include <sys/sdt.h>
+#include <sys/ipc.h>
 #include <sys/queue.h>
+#include <sys/sdt.h>
 
 #include <assert.h>
 #include <err.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <stdbool.h>
@@ -57,6 +59,7 @@ __FBSDID("$FreeBSD$");
 
 static const char probe_prefix[] = "__dtrace_probe_";
 static const char sdt_prefix[] = "sdt_";
+static const char sdtinst_prefix[] = "sdt$";
 
 static bool verbose = false;
 
@@ -82,7 +85,8 @@ static void	process_reloc_section(Elf *, GElf_Ehdr *, GElf_Shdr *,
 		    Elf_Scn *, struct probe_list *);
 static void	process_obj(const char *);
 static void	record_instance(Elf *, GElf_Ehdr *, Elf_Scn *, Elf_Scn *,
-		    Elf_Scn *, Elf_Scn *, const struct probe_instance *, int);
+		    Elf_Scn *, Elf_Scn *, const struct probe_instance *, int,
+		    const char *);
 static Elf_Scn *section_by_name(Elf *, const char *);
 static int	symbol_by_name(Elf *, Elf_Scn *, const char *, GElf_Sym *,
 		    uint64_t *);
@@ -414,6 +418,7 @@ process_obj(const char *obj)
 	struct probe_instance *inst, *tmp;
 	Elf_Scn *scn, *datarelscn, *instscn, *instrelscn, *datascn, *symscn;
 	Elf *e;
+	char *objpath;
 	int fd, cnt, ndx;
 
 	if ((fd = open(obj, O_RDWR)) < 0)
@@ -468,10 +473,13 @@ process_obj(const char *obj)
 	    cnt++;
 	init_new_sections(e, symscn, &instscn, &instrelscn, cnt * wordsize(e));
 
+	if ((objpath = realpath(obj, NULL)) == NULL)
+		errx(1, "failed to resolve %s: %s", obj, strerror(errno));
+
 	ndx = 0;
 	SLIST_FOREACH_SAFE(inst, &plist, next, tmp) {
 		record_instance(e, &ehdr, symscn, datascn, datarelscn,
-		    instrelscn, inst, ndx++);
+		    instrelscn, inst, ndx++, objpath);
 		SLIST_REMOVE(&plist, inst, probe_instance, next);
 		free(inst);
 	}
@@ -493,33 +501,59 @@ process_obj(const char *obj)
 static void
 record_instance(Elf *e, GElf_Ehdr *ehdr, Elf_Scn *symscn, Elf_Scn *datascn,
     Elf_Scn *datarelscn, Elf_Scn *instrelscn, const struct probe_instance *inst,
-    int ndx)
+    int ndx, const char *objpath)
 {
 	struct sdt_instance sdtinst;
 	Elf64_Rela rela;
 	Elf64_Sym sym64;
 	Elf32_Sym sym32;
 	GElf_Sym probeobjsym;
-	char *probeobjname;
-	size_t instoff, namesz, relsz, symsz;
+	GElf_Shdr symshdr;
+	Elf_Scn *strscn;
+	char *probeobjname, *instsymname;
+	size_t instoff, nameoff, namesz, relsz, symsz;
 	uint64_t probeobjndx, instndx;
 	int class;
 
 	sdtinst.probe = NULL; /* Filled in with the relocation from step 3. */
 	sdtinst.offset = inst->offset;
 
-	/* Step 1: install the probe instance into the data section. */
+	/*
+	 * Step 1: install the probe instance into the data section.
+	 */
 
 	instoff = append_data(e, datascn, &sdtinst, sizeof(sdtinst));
 	LOG("created probe instance for '%s' at offset %zu", inst->symname,
 	    instoff);
 
-	/* Step 2: add a symbol table entry for the probe instance object. */
+	/*
+	 * Step 2: add a symbol table entry for the probe instance object.
+	 */
 
+	/*
+	 * Step 2.1: create a unique name for the symbol and add it to the
+	 * string table.
+	 */
+	asprintf(&instsymname, "%s%d.%ld", sdtinst_prefix, ndx,
+	    ftok(objpath, 0));
+	if (instsymname == NULL)
+		errx(1, "asprintf: %s", strerror(errno));
+
+	if (gelf_getshdr(symscn, &symshdr) != &symshdr)
+		errx(1, "failed to look up section header for %s: %s",
+		    get_section_name(e, symscn), ELF_ERR());
+	if ((strscn = elf_getscn(e, symshdr.sh_link)) == NULL)
+		errx(1, "failed to find string table for %s: %s",
+		    get_section_name(e, symscn), ELF_ERR());
+	nameoff = append_data(e, strscn, instsymname, strlen(instsymname) + 1);
+
+	/*
+	 * Step 2.2: create the symbol table entry and add it to the table.
+	 */
 	class = gelf_getclass(e);
 	switch (class) {
 	case ELFCLASS32:
-		sym32.st_name = 0;
+		sym32.st_name = nameoff;
 		sym32.st_value = instoff;
 		sym32.st_size = sizeof(sdtinst); /* XXX cross-compat... */
 		sym32.st_info = ELF32_ST_INFO(STB_GLOBAL, STT_OBJECT);
@@ -529,7 +563,7 @@ record_instance(Elf *e, GElf_Ehdr *ehdr, Elf_Scn *symscn, Elf_Scn *datascn,
 		symsz = sizeof(sym32);
 		break;
 	case ELFCLASS64:
-		sym64.st_name = 0;
+		sym64.st_name = nameoff;
 		sym64.st_info = ELF64_ST_INFO(STB_GLOBAL, STT_OBJECT);
 		sym64.st_other = instoff;
 		sym64.st_shndx = elf_ndxscn(datascn);
