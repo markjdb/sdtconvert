@@ -69,8 +69,10 @@ struct probe_instance {
 SLIST_HEAD(probe_list, probe_instance);
 
 static Elf_Scn *add_section(Elf *, const char *, uint64_t, uint64_t);
+static Elf_Scn *add_reloc_section(Elf *, Elf_Scn *, Elf_Scn *);
 static size_t	append_data(Elf *, Elf_Scn *, const void *, size_t);
 static size_t	expand_section(Elf_Scn *, size_t);
+static Elf_Scn *get_reloc_section(Elf *e, Elf_Scn *);
 static const char *get_section_name(Elf *, Elf_Scn *);
 static void	init_new_sections(Elf *, Elf_Scn *, Elf_Scn **, Elf_Scn **,
 		    size_t);
@@ -128,6 +130,43 @@ add_section(Elf *e, const char *name, uint64_t type, uint64_t flags)
 	return (newscn);
 }
 
+static Elf_Scn *
+add_reloc_section(Elf *e, Elf_Scn *scn, Elf_Scn *symscn)
+{
+	GElf_Shdr relshdr;
+	Elf_Scn *relscn;
+	const char *scnname;
+	char *relscnname;
+	size_t sz, shndx, symndx;
+
+	scnname = get_section_name(e, scn);
+
+	sz = strlen(".rela") + strlen(scnname) + 1;
+	relscnname = xmalloc(sz);
+	(void)strlcpy(relscnname, ".rela", sz);
+	(void)strlcat(relscnname, scnname, sz);
+
+	relscn = add_section(e, relscnname, SHT_RELA, 0);
+	if (gelf_getshdr(relscn, &relshdr) != &relshdr)
+		errx(1, "couldn't get section header for %s: %s", relscnname,
+		    ELF_ERR());
+
+	if ((shndx = elf_ndxscn(scn)) == SHN_UNDEF)
+		errx(1, "couldn't get section index for %s: %s", scnname,
+		    ELF_ERR());
+	if ((symndx = elf_ndxscn(symscn)) == SHN_UNDEF)
+		errx(1, "couldn't get section index for %s: %s",
+		    get_section_name(e, symscn), ELF_ERR());
+
+	relshdr.sh_info = shndx;
+	relshdr.sh_link = symndx;
+	if (gelf_update_shdr(relscn, &relshdr) == 0)
+		errx(1, "updating section header for %s: %s", relscnname,
+		    ELF_ERR());
+
+	return (relscn);
+}
+
 static size_t
 append_data(Elf *e, Elf_Scn *scn, const void *data, size_t sz)
 {
@@ -164,6 +203,29 @@ expand_section(Elf_Scn *scn, size_t sz)
 	return (shdr.sh_size - sz);
 }
 
+static Elf_Scn *
+get_reloc_section(Elf *e, Elf_Scn *scn)
+{
+	GElf_Shdr shdr;
+	Elf_Scn *relscn;
+	size_t shndx;
+
+	if ((shndx = elf_ndxscn(scn)) == SHN_UNDEF)
+		errx(1, "couldn't get section index for %s: %s",
+		    get_section_name(e, scn), ELF_ERR());
+
+	for (relscn = NULL; (relscn = elf_nextscn(e, relscn)) != NULL; ) {
+		if (gelf_getshdr(relscn, &shdr) == NULL)
+			errx(1, "gelf_getshdr: %s", ELF_ERR());
+
+		if ((shdr.sh_type == SHT_REL || shdr.sh_type == SHT_RELA) &&
+		    shdr.sh_info == shndx)
+			return (relscn);
+	}
+	return (NULL);
+}
+
+/* Return the name of the specified section. */
 static const char *
 get_section_name(Elf *e, Elf_Scn *scn)
 {
@@ -185,29 +247,10 @@ static void
 init_new_sections(Elf *e, Elf_Scn *symscn, Elf_Scn **instscn,
     Elf_Scn **instrelscn, size_t scnsz)
 {
-	GElf_Shdr instrelshdr;
 	Elf_Data *data;
-	size_t symndx, instndx;
-
-	*instrelscn = add_section(e, ".relaset_sdt_instances_set", SHT_RELA, 0);
-	if (gelf_getshdr(*instrelscn, &instrelshdr) != &instrelshdr)
-		errx(1,
-	    "couldn't get section header for .relaset_sdt_instances_set");
 
 	*instscn = add_section(e, "set_sdt_instances_set", SHT_PROGBITS,
 	    SHF_ALLOC);
-
-	if ((symndx = elf_ndxscn(symscn)) == SHN_UNDEF)
-		errx(1, "couldn't get section index for .symtab");
-	if ((instndx = elf_ndxscn(*instscn)) == SHN_UNDEF)
-		errx(1, "couldn't get section index for set_sdt_instances_set");
-
-	instrelshdr.sh_info = instndx;
-	instrelshdr.sh_link = symndx;
-
-	if (gelf_update_shdr(*instrelscn, &instrelshdr) == 0)
-		errx(1,
-	    "failed to update section header for .relaset_sdt_instances_set");
 
 	if ((data = elf_newdata(*instscn)) == NULL)
 		errx(1, "failed to add data section: %s", ELF_ERR());
@@ -218,6 +261,8 @@ init_new_sections(Elf *e, Elf_Scn *symscn, Elf_Scn **instscn,
 	memset(data->d_buf, 0, data->d_size);
 
 	assert(expand_section(*instscn, data->d_size) == 0);
+
+	*instrelscn = add_reloc_section(e, *instscn, symscn);
 }
 
 /* XXX need current obj filename for better error messages. */
@@ -409,8 +454,14 @@ process_obj(const char *obj)
 		errx(1, "couldn't find symbol table in %s", obj);
 	if ((datascn = section_by_name(e, ".data")) == NULL)
 		errx(1, "couldn't find data section in %s", obj);
-	if ((datarelscn = section_by_name(e, ".rela.data")) == NULL)
-		errx(1, "couldn't find data relocation section in %s", obj);
+	if ((datarelscn = get_reloc_section(e, datascn)) == NULL) {
+		/*
+		 * The object file doesn't have any relocations against the data
+		 * section, so we have to create a relocation section ourselves.
+		 */
+		LOG("adding data relocation section for %s", obj);
+		datarelscn = add_reloc_section(e, datascn, symscn);
+	}
 
 	cnt = 0;
 	SLIST_FOREACH(inst, &plist, next)
