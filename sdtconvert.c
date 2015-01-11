@@ -544,7 +544,7 @@ record_instance(Elf *e, GElf_Ehdr *ehdr, Elf_Scn *symscn, Elf_Scn *datascn,
 
 	instndx = append_data(e, symscn,
 	    class == ELFCLASS32 ? (void *)&sym32 : (void *)&sym64, symsz);
-	instndx = (instndx + symsz) / symsz;
+	instndx /= symsz;
 
 	LOG("added symbol table entry for '%s' at index %ju", inst->symname,
 	    (uintmax_t)instndx);
