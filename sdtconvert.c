@@ -251,7 +251,14 @@ static void
 init_new_sections(Elf *e, Elf_Scn *symscn, Elf_Scn **instscn,
     Elf_Scn **instrelscn, size_t scnsz)
 {
+	Elf64_Sym sym64;
+	Elf32_Sym sym32;
+	GElf_Shdr symshdr;
 	Elf_Data *data;
+	Elf_Scn *strscn;
+	const char *startset, *stopset;
+	void *sym;
+	size_t startoff, stopoff, symsz;
 
 	*instscn = add_section(e, "set_sdt_instances_set", SHT_PROGBITS,
 	    SHF_ALLOC);
@@ -267,6 +274,51 @@ init_new_sections(Elf *e, Elf_Scn *symscn, Elf_Scn **instscn,
 	assert(expand_section(*instscn, data->d_size) == 0);
 
 	*instrelscn = add_reloc_section(e, *instscn, symscn);
+
+	/*
+	 * It turns out that the kernel expects a pair of symbols to denote the
+	 * boundaries of the linker set. Some deep magicks are at work here
+	 * though: all we need to do is define the symbols, and the linker takes
+	 * care of the rest. Not yet sure how that actually works.
+	 */
+	if (gelf_getshdr(symscn, &symshdr) != &symshdr)
+		errx(1, "failed to look up section header for %s: %s",
+		    get_section_name(e, symscn), ELF_ERR());
+	if ((strscn = elf_getscn(e, symshdr.sh_link)) == NULL)
+		errx(1, "failed to find string table for %s: %s",
+		    get_section_name(e, symscn), ELF_ERR());
+
+	startset = "__start_set_sdt_instances_set";
+	startoff = append_data(e, strscn, startset, strlen(startset) + 1);
+	stopset = "__stop_set_sdt_instances_set";
+	stopoff = append_data(e, strscn, stopset, strlen(stopset) + 1);
+
+	switch (gelf_getclass(e)) {
+	case ELFCLASS32:
+		memset(&sym32, 0, sizeof(sym32));
+		sym32.st_info = ELF32_ST_INFO(STB_WEAK, STT_NOTYPE);
+
+		symsz = sizeof(sym32);
+		sym = &sym32;
+		break;
+	case ELFCLASS64:
+		memset(&sym64, 0, sizeof(sym64));
+		sym64.st_info = ELF64_ST_INFO(STB_WEAK, STT_NOTYPE);
+
+		symsz = sizeof(sym64);
+		sym = &sym64;
+		break;
+	default:
+		errx(1, "unexpected ELF class %d", gelf_getclass(e));
+	}
+
+	sym32.st_name = startoff;
+	sym64.st_name = startoff;
+	append_data(e, symscn, sym, symsz);
+
+	sym32.st_name = stopoff;
+	sym64.st_name = stopoff;
+	append_data(e, symscn, sym, symsz);
 }
 
 /* XXX need current obj filename for better error messages. */
