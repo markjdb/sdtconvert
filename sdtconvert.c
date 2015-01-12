@@ -565,9 +565,9 @@ record_instance(Elf *e, GElf_Ehdr *ehdr, Elf_Scn *symscn, Elf_Scn *datascn,
 	case ELFCLASS64:
 		sym64.st_name = nameoff;
 		sym64.st_info = ELF64_ST_INFO(STB_GLOBAL, STT_OBJECT);
-		sym64.st_other = instoff;
+		sym64.st_other = 0;
 		sym64.st_shndx = elf_ndxscn(datascn);
-		sym64.st_value = 0;
+		sym64.st_value = instoff;
 		sym64.st_size = sizeof(sdtinst); /* XXX cross-compat... */
 
 		symsz = sizeof(sym64);
