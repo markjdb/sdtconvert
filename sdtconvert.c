@@ -167,10 +167,13 @@ add_reloc_section(Elf *e, Elf_Scn *scn, Elf_Scn *symscn)
 	if (gelf_update_shdr(relscn, &relshdr) == 0)
 		errx(1, "updating section header for %s: %s", relscnname,
 		    ELF_ERR());
-
 	return (relscn);
 }
 
+/*
+ * Append arbitrary data to an ELF section, returning the original size of the
+ * section.
+ */
 static size_t
 append_data(Elf *e, Elf_Scn *scn, const void *data, size_t sz)
 {
@@ -189,7 +192,6 @@ append_data(Elf *e, Elf_Scn *scn, const void *data, size_t sz)
 	newdata->d_buf = xmalloc(sz);
 	newdata->d_size = sz;
 	memcpy(newdata->d_buf, data, sz);
-
 	return (expand_section(scn, sz));
 }
 
@@ -207,6 +209,10 @@ expand_section(Elf_Scn *scn, size_t sz)
 	return (shdr.sh_size - sz);
 }
 
+/*
+ * Find the relocation section associated with a given ELF section.
+ * XXX there can probably be multiple relocation sections...
+ */
 static Elf_Scn *
 get_reloc_section(Elf *e, Elf_Scn *scn)
 {
@@ -321,7 +327,6 @@ init_new_sections(Elf *e, Elf_Scn *symscn, Elf_Scn **instscn,
 	append_data(e, symscn, sym, symsz);
 }
 
-/* XXX need current obj filename for better error messages. */
 static int
 process_reloc(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *symshdr, Elf_Scn *symtab,
     uint8_t *target, GElf_Addr offset, GElf_Xword *info,
@@ -389,6 +394,11 @@ process_reloc(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *symshdr, Elf_Scn *symtab,
 	return (0);
 }
 
+/*
+ * Look for relocations against DTrace probe stubs. Such relocations are used to
+ * populate the probe instance list (plist) and then invalidated, since we
+ * overwrite the call site with NOPs.
+ */
 static void
 process_reloc_section(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *shdr, Elf_Scn *scn,
     struct probe_list *plist)
@@ -461,6 +471,13 @@ process_reloc_section(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *shdr, Elf_Scn *scn,
 	}
 }
 
+/*
+ * Process an input object file. This function choreographs the work done by
+ * sdtconvert: it first processes all the relocations against the DTrace probe
+ * stubs and uses the information from those relocations to build up a list
+ * (plist) of probe sites. It then adds information about each probe site to the
+ * object file, used by the kernel SDT module to actually create DTrace probes.
+ */
 static void
 process_obj(const char *obj)
 {
@@ -488,7 +505,7 @@ process_obj(const char *obj)
 
 	SLIST_INIT(&plist);
 
-	/* Perform relocations for DTrace probe stub calls. */
+	/* Hijack relocations for DTrace probe stub calls. */
 
 	for (scn = NULL; (scn = elf_nextscn(e, scn)) != NULL; ) {
 		if (gelf_getshdr(scn, &shdr) == NULL)
@@ -566,7 +583,6 @@ record_instance(Elf *e, GElf_Ehdr *ehdr, Elf_Scn *symscn, Elf_Scn *datascn,
 	void *sym;
 	size_t instoff, nameoff, namesz, relsz, symsz;
 	uint64_t probeobjndx, instndx;
-	int class;
 
 	sdtinst.probe = NULL; /* Filled in with the relocation from step 3. */
 	sdtinst.offset = inst->offset;
@@ -603,8 +619,7 @@ record_instance(Elf *e, GElf_Ehdr *ehdr, Elf_Scn *symscn, Elf_Scn *datascn,
 	/*
 	 * Step 2.2: create the symbol table entry and add it to the table.
 	 */
-	class = gelf_getclass(e);
-	switch (class) {
+	switch (gelf_getclass(e)) {
 	case ELFCLASS32:
 		sym32.st_name = nameoff;
 		sym32.st_value = instoff;
@@ -628,7 +643,7 @@ record_instance(Elf *e, GElf_Ehdr *ehdr, Elf_Scn *symscn, Elf_Scn *datascn,
 		sym = &sym64;
 		break;
 	default:
-		errx(1, "unexpected ELF class %d", class);
+		errx(1, "unexpected ELF class %d", gelf_getclass(e));
 	}
 
 	instndx = append_data(e, symscn, sym, symsz) / symsz;
