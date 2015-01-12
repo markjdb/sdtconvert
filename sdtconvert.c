@@ -511,6 +511,7 @@ record_instance(Elf *e, GElf_Ehdr *ehdr, Elf_Scn *symscn, Elf_Scn *datascn,
 	GElf_Shdr symshdr;
 	Elf_Scn *strscn;
 	char *probeobjname, *instsymname;
+	void *sym;
 	size_t instoff, nameoff, namesz, relsz, symsz;
 	uint64_t probeobjndx, instndx;
 	int class;
@@ -561,6 +562,7 @@ record_instance(Elf *e, GElf_Ehdr *ehdr, Elf_Scn *symscn, Elf_Scn *datascn,
 		sym32.st_shndx = elf_ndxscn(datascn);
 
 		symsz = sizeof(sym32);
+		sym = &sym32;
 		break;
 	case ELFCLASS64:
 		sym64.st_name = nameoff;
@@ -571,14 +573,13 @@ record_instance(Elf *e, GElf_Ehdr *ehdr, Elf_Scn *symscn, Elf_Scn *datascn,
 		sym64.st_size = sizeof(sdtinst); /* XXX cross-compat... */
 
 		symsz = sizeof(sym64);
+		sym = &sym64;
 		break;
 	default:
 		errx(1, "unexpected ELF class %d", class);
 	}
 
-	instndx = append_data(e, symscn,
-	    class == ELFCLASS32 ? (void *)&sym32 : (void *)&sym64, symsz);
-	instndx /= symsz;
+	instndx = append_data(e, symscn, sym, symsz) / symsz;
 
 	LOG("added symbol table entry for '%s' at index %ju", inst->symname,
 	    (uintmax_t)instndx);
