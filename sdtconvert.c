@@ -244,8 +244,8 @@ get_section_name(Elf *e, Elf_Scn *scn)
 }
 
 /*
- * Create a section for the set of probe instances (set_sdt_instances_set), and
- * create a relocation section for it.
+ * Create a linker set for the set of probe instances (set_sdt_instances_set),
+ * and create a relocation section for it.
  */
 static void
 init_new_sections(Elf *e, Elf_Scn *symscn, Elf_Scn **instscn,
@@ -260,9 +260,9 @@ init_new_sections(Elf *e, Elf_Scn *symscn, Elf_Scn **instscn,
 		errx(1, "failed to add data section: %s", ELF_ERR());
 
 	data->d_align = wordsize(e);
-	data->d_buf = xmalloc(data->d_size);
+	data->d_buf = xmalloc(scnsz);
 	data->d_size = scnsz;
-	memset(data->d_buf, 0, data->d_size);
+	memset(data->d_buf, 0, scnsz);
 
 	assert(expand_section(*instscn, data->d_size) == 0);
 
