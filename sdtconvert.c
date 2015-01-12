@@ -75,7 +75,7 @@ static Elf_Scn *add_section(Elf *, const char *, uint64_t, uint64_t);
 static Elf_Scn *add_reloc_section(Elf *, Elf_Scn *, Elf_Scn *);
 static size_t	append_data(Elf *, Elf_Scn *, const void *, size_t);
 static size_t	expand_section(Elf_Scn *, size_t);
-static Elf_Scn *get_reloc_section(Elf *e, Elf_Scn *);
+static Elf_Scn *get_reloc_section(Elf *e, Elf_Scn *, Elf_Scn *);
 static const char *get_section_name(Elf *, Elf_Scn *);
 static void	init_new_sections(Elf *, Elf_Scn *, Elf_Scn **, Elf_Scn **,
 		    size_t);
@@ -210,26 +210,29 @@ expand_section(Elf_Scn *scn, size_t sz)
 }
 
 /*
- * Find the relocation section associated with a given ELF section.
- * XXX there can probably be multiple relocation sections...
+ * Find the relocation section associated with a given ELF section and symbol
+ * table.
  */
 static Elf_Scn *
-get_reloc_section(Elf *e, Elf_Scn *scn)
+get_reloc_section(Elf *e, Elf_Scn *scn, Elf_Scn *symscn)
 {
 	GElf_Shdr shdr;
 	Elf_Scn *relscn;
-	size_t shndx;
+	size_t shndx, symshndx;
 
 	if ((shndx = elf_ndxscn(scn)) == SHN_UNDEF)
 		errx(1, "couldn't get section index for %s: %s",
 		    get_section_name(e, scn), ELF_ERR());
+	if ((symshndx = elf_ndxscn(symscn)) == SHN_UNDEF)
+		errx(1, "couldn't get section index for %s: %s",
+		    get_section_name(e, symscn), ELF_ERR());
 
 	for (relscn = NULL; (relscn = elf_nextscn(e, relscn)) != NULL; ) {
 		if (gelf_getshdr(relscn, &shdr) == NULL)
 			errx(1, "gelf_getshdr: %s", ELF_ERR());
 
 		if ((shdr.sh_type == SHT_REL || shdr.sh_type == SHT_RELA) &&
-		    shdr.sh_info == shndx)
+		    shdr.sh_info == shndx && shdr.sh_link == symshndx)
 			return (relscn);
 	}
 	return (NULL);
@@ -526,7 +529,7 @@ process_obj(const char *obj)
 		errx(1, "couldn't find symbol table in %s", obj);
 	if ((datascn = section_by_name(e, ".data")) == NULL)
 		errx(1, "couldn't find data section in %s", obj);
-	if ((datarelscn = get_reloc_section(e, datascn)) == NULL) {
+	if ((datarelscn = get_reloc_section(e, datascn, symscn)) == NULL) {
 		/*
 		 * The object file doesn't have any relocations against the data
 		 * section, so we have to create a relocation section ourselves.
