@@ -282,10 +282,8 @@ init_new_sections(Elf *e, Elf_Scn *symscn, Elf_Scn **instscn,
 	*instrelscn = add_reloc_section(e, *instscn, symscn);
 
 	/*
-	 * It turns out that the kernel expects a pair of symbols to denote the
-	 * boundaries of the linker set. Some deep magicks are at work here
-	 * though: all we need to do is define the symbols, and the linker takes
-	 * care of the rest. Not yet sure how that actually works.
+	 * Create __start_<set> and __stop_<set> variables so that the kernel
+	 * can find the section address. They're filled in by the linker.
 	 */
 	if (gelf_getshdr(symscn, &symshdr) != &symshdr)
 		errx(1, "failed to look up section header for %s: %s",
