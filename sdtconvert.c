@@ -124,7 +124,7 @@ add_section(Elf *e, const char *name, uint64_t type, uint64_t flags)
 	newshdr.sh_name = off;
 	newshdr.sh_type = type;
 	newshdr.sh_flags = flags;
-	newshdr.sh_addralign = 8;
+	newshdr.sh_addralign = wordsize(e);
 
 	if (gelf_update_shdr(newscn, &newshdr) == 0)
 		errx(1, "gelf_update_shdr: %s", ELF_ERR());
