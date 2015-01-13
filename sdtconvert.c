@@ -717,7 +717,7 @@ record_instance(Elf *e, GElf_Ehdr *ehdr, Elf_Scn *symscn, Elf_Scn *datascn,
 		rela.r_offset = instoff + /* XXX cross-compat */
 		    __offsetof(struct sdt_instance, sdti_offset);
 		rela.r_info = ELF64_R_INFO(inst->symndx, R_X86_64_64);
-		rela.r_addend = 0; //inst->offset;
+		rela.r_addend = inst->offset;
 
 		relsz = sizeof(rela);
 		break;
