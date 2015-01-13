@@ -102,8 +102,7 @@ static void *	xmalloc(size_t);
 static Elf_Scn *
 add_section(Elf *e, const char *name, uint64_t type, uint64_t flags)
 {
-	GElf_Shdr newshdr, strshdr;
-	Elf_Data *strdata;
+	GElf_Shdr newshdr;
 	Elf_Scn *newscn, *strscn;
 	size_t off, shdrstrndx;
 
@@ -111,11 +110,7 @@ add_section(Elf *e, const char *name, uint64_t type, uint64_t flags)
 	if (elf_getshdrstrndx(e, &shdrstrndx) != 0)
 		errx(1, "elf_getshdrstrndx: %s", ELF_ERR());
 	if ((strscn = elf_getscn(e, shdrstrndx)) == NULL)
-		errx(1, "elf_getscn on shdrstrtab: %s", ELF_ERR());
-	if (gelf_getshdr(strscn, &strshdr) != &strshdr)
-		errx(1, "gelf_getshdr on shdrstrtab: %s", ELF_ERR());
-	if ((strdata = elf_getdata(strscn, NULL)) == NULL)
-		errx(1, "elf_getdata on shdrstrtab: %s", ELF_ERR());
+		errx(1, "elf_getscn (shdrstrtab): %s", ELF_ERR());
 
 	off = append_data(e, strscn, name, strlen(name) + 1);
 
@@ -123,7 +118,7 @@ add_section(Elf *e, const char *name, uint64_t type, uint64_t flags)
 	if ((newscn = elf_newscn(e)) == NULL)
 		errx(1, "elf_newscn: %s", ELF_ERR());
 	if (gelf_getshdr(newscn, &newshdr) != &newshdr)
-		errx(1, "gelf_getshdr: %s", ELF_ERR());
+		errx(1, "gelf_getshdr (%s): %s", name, ELF_ERR());
 
 	newshdr.sh_name = off;
 	newshdr.sh_type = type;
@@ -131,13 +126,16 @@ add_section(Elf *e, const char *name, uint64_t type, uint64_t flags)
 	newshdr.sh_addralign = wordsize(e);
 
 	if (gelf_update_shdr(newscn, &newshdr) == 0)
-		errx(1, "gelf_update_shdr: %s", ELF_ERR());
+		errx(1, "gelf_update_shdr (%s): %s", name, ELF_ERR());
 
 	LOG("added section %s", name);
 
 	return (newscn);
 }
 
+/*
+ * Add a new relocation section for the specified section and symbol table.
+ */
 static Elf_Scn *
 add_reloc_section(Elf *e, Elf_Scn *scn, Elf_Scn *symscn)
 {
@@ -156,21 +154,18 @@ add_reloc_section(Elf *e, Elf_Scn *scn, Elf_Scn *symscn)
 
 	relscn = add_section(e, relscnname, SHT_RELA, 0);
 	if (gelf_getshdr(relscn, &relshdr) != &relshdr)
-		errx(1, "couldn't get section header for %s: %s", relscnname,
-		    ELF_ERR());
+		errx(1, "gelf_getshdr (%s): %s", relscnname, ELF_ERR());
 
 	if ((shndx = elf_ndxscn(scn)) == SHN_UNDEF)
-		errx(1, "couldn't get section index for %s: %s", scnname,
-		    ELF_ERR());
+		errx(1, "elf_ndxscn (%s): %s", scnname, ELF_ERR());
 	if ((symndx = elf_ndxscn(symscn)) == SHN_UNDEF)
-		errx(1, "couldn't get section index for %s: %s",
-		    get_section_name(e, symscn), ELF_ERR());
+		errx(1, "elf_ndxscn (%s): %s", get_section_name(e, symscn),
+		    ELF_ERR());
 
 	relshdr.sh_info = shndx;
 	relshdr.sh_link = symndx;
 	if (gelf_update_shdr(relscn, &relshdr) == 0)
-		errx(1, "updating section header for %s: %s", relscnname,
-		    ELF_ERR());
+		errx(1, "gelf_update_shdr (%s): %s", relscnname, ELF_ERR());
 	return (relscn);
 }
 
@@ -185,11 +180,11 @@ append_data(Elf *e, Elf_Scn *scn, const void *data, size_t sz)
 	Elf_Data *newdata;
 
 	if (gelf_getshdr(scn, &shdr) != &shdr)
-		errx(1, "failed to get section header for %s: %s",
-		    get_section_name(e, scn), ELF_ERR());
+		errx(1, "gelf_getshdr (%s): %s", get_section_name(e, scn),
+		    ELF_ERR());
 	if ((newdata = elf_newdata(scn)) == NULL)
-		errx(1, "failed to allocate new data descriptor for %s: %s",
-		    get_section_name(e, scn), ELF_ERR());
+		errx(1, "elf_newdata (%s): %s", get_section_name(e, scn),
+		    ELF_ERR());
 
 	/* No need to set d_off since we let libelf handle the layout. */
 	newdata->d_align = shdr.sh_addralign;
@@ -225,15 +220,16 @@ get_reloc_section(Elf *e, Elf_Scn *scn, Elf_Scn *symscn)
 	size_t shndx, symshndx;
 
 	if ((shndx = elf_ndxscn(scn)) == SHN_UNDEF)
-		errx(1, "couldn't get section index for %s: %s",
-		    get_section_name(e, scn), ELF_ERR());
+		errx(1, "elf_ndxscn (%s): %s", get_section_name(e, scn),
+		    ELF_ERR());
 	if ((symshndx = elf_ndxscn(symscn)) == SHN_UNDEF)
-		errx(1, "couldn't get section index for %s: %s",
-		    get_section_name(e, symscn), ELF_ERR());
+		errx(1, "elf_ndxscn (%s): %s", get_section_name(e, symscn),
+		    ELF_ERR());
 
 	for (relscn = NULL; (relscn = elf_nextscn(e, relscn)) != NULL; ) {
 		if (gelf_getshdr(relscn, &shdr) == NULL)
-			errx(1, "gelf_getshdr: %s", ELF_ERR());
+			errx(1, "gelf_getshdr (%s): %s",
+			    get_section_name(e, relscn), ELF_ERR());
 
 		if ((shdr.sh_type == SHT_REL || shdr.sh_type == SHT_RELA) &&
 		    shdr.sh_info == shndx && shdr.sh_link == symshndx)
@@ -277,7 +273,7 @@ init_new_sections(Elf *e, Elf_Scn *symscn, Elf_Scn **instscn,
 	    SHF_ALLOC);
 
 	if ((data = elf_newdata(*instscn)) == NULL)
-		errx(1, "failed to add data section: %s", ELF_ERR());
+		errx(1, "elf_newdata (set_sdt_instances_set): %s", ELF_ERR());
 
 	data->d_align = wordsize(e);
 	data->d_buf = xmalloc(scnsz);
@@ -294,8 +290,8 @@ init_new_sections(Elf *e, Elf_Scn *symscn, Elf_Scn **instscn,
 	 * in by the linker.
 	 */
 	if (gelf_getshdr(symscn, &symshdr) != &symshdr)
-		errx(1, "failed to look up section header for %s: %s",
-		    get_section_name(e, symscn), ELF_ERR());
+		errx(1, "gelf_getshdr (%s): %s", get_section_name(e, symscn),
+		    ELF_ERR());
 	if ((strscn = elf_getscn(e, symshdr.sh_link)) == NULL)
 		errx(1, "failed to find string table for %s: %s",
 		    get_section_name(e, symscn), ELF_ERR());
@@ -347,7 +343,7 @@ process_reloc(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *symshdr, Elf_Scn *symscn,
 	sym = symbol_by_index(symscn, GELF_R_SYM(*info));
 	symname = elf_strptr(e, symshdr->sh_link, sym->st_name);
 	if (symname == NULL)
-		errx(1, "elf_strptr: %s", ELF_ERR());
+		errx(1, "couldn't find symbol name for relocation");
 
 	if (strncmp(symname, probe_prefix, sizeof(probe_prefix) - 1) != 0)
 		/* We're not interested in this relocation. */
