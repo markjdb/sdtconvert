@@ -48,7 +48,7 @@ __FBSDID("$FreeBSD$");
 
 #define	ELF_ERR()	(elf_errmsg(elf_errno()))
 #define	LOG(...) do {					\
-	if (verbose)					\
+	if (g_verbose)					\
 		warnx(__VA_ARGS__);			\
 } while (0)
 
@@ -61,7 +61,8 @@ static const char probe_prefix[] = "__dtrace_probe_";
 static const char sdtobj_prefix[] = "sdt_";
 static const char sdtinst_prefix[] = "sdt$";
 
-static bool verbose = false;
+static const char *g_currobj;
+static bool g_verbose = false;
 
 struct probe_instance {
 	const char	*symname;
@@ -491,6 +492,8 @@ process_obj(const char *obj)
 	char *objpath;
 	int fd, cnt, ndx;
 
+	g_currobj = obj;
+
 	if ((fd = open(obj, O_RDWR)) < 0)
 		err(1, "failed to open %s", obj);
 
@@ -804,7 +807,7 @@ main(int argc, char **argv)
 {
 
 	if (argc > 1 && strcmp(argv[1], "-v") == 0) {
-		verbose = true;
+		g_verbose = true;
 		argv++; argc--;
 	}
 
