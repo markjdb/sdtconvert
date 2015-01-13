@@ -359,10 +359,20 @@ process_reloc(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *symshdr, Elf_Scn *symtab,
 	switch (ehdr->e_machine) {
 	case EM_X86_64:
 		/* Sanity checks. */
+		if (GELF_R_TYPE(*info) != R_X86_64_64 &&
+		    GELF_R_TYPE(*info) != R_X86_64_PC32) {
+			if (GELF_R_TYPE(*info) != R_X86_64_NONE)
+				errx(1,
+			    "unexpected relocation type 0x%lx against %s",
+				    GELF_R_TYPE(*info), symname);
+			/* We've presumably already processed this file. */
+			return (1);
+		}
 		opc = target[offset - 1];
 		if (opc != AMD64_CALL && opc != AMD64_JMP32)
 			errx(1, "unexpected opcode 0x%x for %s at offset 0x%lx",
 			    opc, symname, offset);
+
 		if (target[offset + 0] != 0 ||
 		    target[offset + 1] != 0 ||
 		    target[offset + 2] != 0 ||
