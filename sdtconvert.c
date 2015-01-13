@@ -290,7 +290,8 @@ init_new_sections(Elf *e, Elf_Scn *symscn, Elf_Scn **instscn,
 
 	/*
 	 * Create __start_<set> and __stop_<set> variables so that the kernel
-	 * can find the section address. They're filled in by the linker.
+	 * can find the section address. They're magic variables that are filled
+	 * in by the linker.
 	 */
 	if (gelf_getshdr(symscn, &symshdr) != &symshdr)
 		errx(1, "failed to look up section header for %s: %s",
