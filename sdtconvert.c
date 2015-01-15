@@ -778,7 +778,7 @@ symbol_by_name(Elf *e, Elf_Scn *scn, const char *symname, GElf_Sym *sym,
 		errx(1, "gelf_getshdr: %s", ELF_ERR());
 
 	i = 0;
-	for (data = NULL; (data = elf_getdata(scn, NULL)) != NULL; ) {
+	for (data = NULL; (data = elf_getdata(scn, data)) != NULL; ) {
 		for (; i < shdr.sh_size / shdr.sh_entsize; i++) {
 			if (gelf_getsym(data, i, sym) == NULL)
 				errx(1, "gelf_getsym: %s", ELF_ERR());
@@ -803,7 +803,7 @@ symbol_by_offset(Elf_Scn *scn, uint64_t offset, GElf_Sym *sym, uint64_t *ndx)
 		errx(1, "gelf_getshdr: %s", ELF_ERR());
 
 	i = 0;
-	for (data = NULL; (data = elf_getdata(scn, NULL)) != NULL; ) {
+	for (data = NULL; (data = elf_getdata(scn, data)) != NULL; ) {
 		for (; i < shdr.sh_size / shdr.sh_entsize; i++) {
 			if (gelf_getsym(data, i, sym) == NULL)
 				errx(1, "gelf_getsym: %s", ELF_ERR());
