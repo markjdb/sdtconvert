@@ -777,16 +777,14 @@ symbol_by_name(Elf *e, Elf_Scn *scn, const char *symname, GElf_Sym *sym,
 	if (gelf_getshdr(scn, &shdr) != &shdr)
 		errx(1, "gelf_getshdr: %s", ELF_ERR());
 
-	i = 0;
+	*ndx = 0;
 	for (data = NULL; (data = elf_getdata(scn, data)) != NULL; ) {
-		for (; i < shdr.sh_size / shdr.sh_entsize; i++) {
+		for (i = 0; i * shdr.sh_entsize < data->d_size; i++, (*ndx)++) {
 			if (gelf_getsym(data, i, sym) == NULL)
 				errx(1, "gelf_getsym: %s", ELF_ERR());
 			name = elf_strptr(e, shdr.sh_link, sym->st_name);
-			if (name != NULL && strcmp(name, symname) == 0) {
-				*ndx = i;
+			if (name != NULL && strcmp(name, symname) == 0)
 				return (1); /* There's my chippy. */
-			}
 		}
 	}
 	return (0);
@@ -802,18 +800,15 @@ symbol_by_offset(Elf_Scn *scn, uint64_t offset, GElf_Sym *sym, uint64_t *ndx)
 	if (gelf_getshdr(scn, &shdr) != &shdr)
 		errx(1, "gelf_getshdr: %s", ELF_ERR());
 
-	i = 0;
+	*ndx = 0;
 	for (data = NULL; (data = elf_getdata(scn, data)) != NULL; ) {
-		for (; i < shdr.sh_size / shdr.sh_entsize; i++) {
+		for (i = 0; i * shdr.sh_entsize < data->d_size; i++, (*ndx)++) {
 			if (gelf_getsym(data, i, sym) == NULL)
 				errx(1, "gelf_getsym: %s", ELF_ERR());
-			if (GELF_ST_TYPE(sym->st_info) != STT_FUNC)
-				continue;
-			if (offset >= sym->st_value &&
-			    offset < sym->st_value + sym->st_size) {
-				*ndx = i;
+			if (GELF_ST_TYPE(sym->st_info) == STT_FUNC &&
+			    offset >= sym->st_value &&
+			    offset < sym->st_value + sym->st_size)
 				return (1);
-			}
 		}
 	}
 	return (0);
