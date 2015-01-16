@@ -800,12 +800,12 @@ section_by_name(Elf *e, const char *name)
  * matching symbol was found, 0 otherwise.
  */
 static int
-symbol_by_name(Elf *e, Elf_Scn *scn, const char *symname, GElf_Sym *sym,
+symbol_by_name(Elf *e, Elf_Scn *scn, const char *name, GElf_Sym *sym,
     uint64_t *ndx)
 {
 	GElf_Shdr shdr;
 	Elf_Data *data;
-	const char *name;
+	const char *symname;
 	u_int i;
 
 	if (gelf_getshdr(scn, &shdr) != &shdr)
@@ -816,14 +816,18 @@ symbol_by_name(Elf *e, Elf_Scn *scn, const char *symname, GElf_Sym *sym,
 		for (i = 0; i * shdr.sh_entsize < data->d_size; i++, (*ndx)++) {
 			if (gelf_getsym(data, i, sym) == NULL)
 				errx(1, "gelf_getsym: %s", ELF_ERR());
-			name = elf_strptr(e, shdr.sh_link, sym->st_name);
-			if (name != NULL && strcmp(name, symname) == 0)
+			symname = elf_strptr(e, shdr.sh_link, sym->st_name);
+			if (symname != NULL && strcmp(name, symname) == 0)
 				return (1); /* There's my chippy. */
 		}
 	}
 	return (0);
 }
 
+/*
+ * Look up a function symbol by offset. Return 1 if a matching symbol was found,
+ * 0 otherwise.
+ */
 static int
 symbol_by_offset(Elf_Scn *scn, uint64_t offset, GElf_Sym *sym, uint64_t *ndx)
 {
