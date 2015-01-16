@@ -337,7 +337,7 @@ process_reloc(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *symshdr, Elf_Scn *symscn,
 	GElf_Sym funcsym;
 	struct probe_instance *inst;
 	GElf_Sym *sym;
-	char *symname;
+	const char *symname;
 	uint8_t opc;
 
 	sym = symbol_by_index(symscn, GELF_R_SYM(*info));
