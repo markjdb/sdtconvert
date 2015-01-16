@@ -720,8 +720,8 @@ record_instance(Elf *e, GElf_Ehdr *ehdr, Elf_Scn *symscn, Elf_Scn *datascn,
 		default:
 			errx(1, "unexpected ELF class %d", gelf_getclass(e));
 		}
-
 		probeobjndx = append_data(e, symscn, sym, symsz) / symsz;
+		LOG("added probe object symbol '%s'", probeobjname);
 	}
 	free(probeobjname);
 
