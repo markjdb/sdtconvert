@@ -694,28 +694,16 @@ record_instance(Elf *e, GElf_Ehdr *ehdr, Elf_Scn *symscn, Elf_Scn *datascn,
 		 */
 		nameoff = append_data(e, strscn, probeobjname,
 		    strlen(probeobjname) + 1);
+
+		memset(sym, 0, symsz);
 		switch (gelf_getclass(e)) {
 		case ELFCLASS32:
 			sym32.st_name = nameoff;
-			sym32.st_value = 0;
-			sym32.st_size = 0;
 			sym32.st_info = ELF32_ST_INFO(STB_GLOBAL, STT_NOTYPE);
-			sym32.st_other = 0;
-			sym32.st_shndx = 0;
-
-			symsz = sizeof(sym32);
-			sym = &sym32;
 			break;
 		case ELFCLASS64:
 			sym64.st_name = nameoff;
 			sym64.st_info = ELF64_ST_INFO(STB_GLOBAL, STT_NOTYPE);
-			sym64.st_other = 0;
-			sym64.st_shndx = 0;
-			sym64.st_value = 0;
-			sym64.st_size = 0;
-
-			symsz = sizeof(sym64);
-			sym = &sym64;
 			break;
 		default:
 			errx(1, "unexpected ELF class %d", gelf_getclass(e));
