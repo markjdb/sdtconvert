@@ -386,7 +386,7 @@ process_reloc(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *symshdr, Elf_Scn *symscn,
 
 		/* If this was a tail call, we need to return instead. */
 		if (opc == AMD64_JMP32)
-			target[offset - 1] = AMD64_RETQ;
+			target[offset] = AMD64_RETQ;
 
 		/* Make sure the linker ignores this relocation. */
 		*info &= ~GELF_R_TYPE(*info);
