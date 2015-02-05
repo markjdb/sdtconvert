@@ -286,8 +286,8 @@ init_new_sections(Elf *e, Elf_Scn *symscn, Elf_Scn **instscn,
 
 	/*
 	 * Create __start_<set> and __stop_<set> variables so that the kernel
-	 * can find the section address. They're magic variables that are filled
-	 * in by the linker.
+	 * can find the section address. They're magic symbols that are
+	 * instantiated by the linker.
 	 */
 	if (gelf_getshdr(symscn, &symshdr) != &symshdr)
 		errx(1, "gelf_getshdr (%s): %s", get_section_name(e, symscn),
@@ -488,10 +488,11 @@ process_reloc_section(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *shdr, Elf_Scn *scn,
 
 /*
  * Process an input object file. This function choreographs the work done by
- * sdtconvert: it first processes all the relocations against the DTrace probe
+ * sdtpatch: it first processes all the relocations against the DTrace probe
  * stubs and uses the information from those relocations to build up a list
  * (plist) of probe sites. It then adds information about each probe site to the
- * object file, used by the kernel SDT module to actually create DTrace probes.
+ * object file, later used by the kernel SDT module to actually create DTrace
+ * probes.
  */
 static void
 process_obj(const char *obj)

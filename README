@@ -2,7 +2,7 @@ This is a program which fixes up SDT probe relocations. It's intended for use
 with the FreeBSD kernel.
 
 It runs only on relocatable object files. For each such file specified in the
-arguments, sdtconvert scans the text relocations and overwrites all calls to
+arguments, sdtpatch scans the text relocations and overwrites all calls to
 DTrace probe stubs with nops. Each such relocation is recorded in a dedicated
 ELF section (similar to the linker sets used to store other probe info), and
 we also update the relocation so that it ends up being ignored by the linker.

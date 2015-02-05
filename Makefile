@@ -1,6 +1,6 @@
 # $FreeBSD$
 
-PROG=	sdtconvert
+PROG=	sdtpatch
 BINDIR?= /usr/bin
 MAN=
 
