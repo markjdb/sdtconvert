@@ -491,7 +491,7 @@ process_reloc_section(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *shdr, Elf_Scn *scn,
  * sdtpatch: it first processes all the relocations against the DTrace probe
  * stubs and uses the information from those relocations to build up a list
  * (plist) of probe sites. It then adds information about each probe site to the
- * object file, later used by the kernel SDT module to actually create DTrace
+ * object file, later used by the SDT kernel module to actually create DTrace
  * probes.
  */
 static void
@@ -541,9 +541,18 @@ process_obj(const char *obj)
 
 	/* Now record all of the instance sites. */
 
-	/* XXX this isn't the right way to find these sections. */
-	if ((symscn = section_by_name(e, ".symtab")) == NULL)
+	for (scn = NULL, symscn = NULL; (scn = elf_nextscn(e, scn)) != NULL; ) {
+		if (gelf_getshdr(scn, &shdr) == NULL)
+			errx(1, "gelf_getshdr: %s", ELF_ERR());
+
+		if (shdr.sh_type == SHT_SYMTAB) {
+			symscn = scn;
+			break;
+		}
+	}
+	if (symscn == NULL)
 		errx(1, "couldn't find symbol table in %s", obj);
+
 	if ((datascn = section_by_name(e, ".data")) == NULL)
 		errx(1, "couldn't find data section in %s", obj);
 	if ((datarelscn = get_reloc_section(e, datascn, symscn)) == NULL) {
