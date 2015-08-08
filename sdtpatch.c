@@ -57,7 +57,7 @@ __FBSDID("$FreeBSD$");
 #define	AMD64_NOP	0x90
 #define	AMD64_RETQ	0xc3
 
-static const char probe_prefix[] = "__dtrace_probe_";
+static const char probe_prefix[] = "__dtrace_sdt_";
 static const char sdtobj_prefix[] = "sdt_";
 static const char sdtinst_prefix[] = "sdt$";
 
@@ -338,6 +338,7 @@ process_reloc(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *symshdr, Elf_Scn *symscn,
 	struct probe_instance *inst;
 	GElf_Sym *sym;
 	const char *symname;
+	Elf64_Xword nulrel;
 	uint8_t opc;
 
 	sym = symbol_by_index(symscn, GELF_R_SYM(*info));
@@ -388,13 +389,14 @@ process_reloc(Elf *e, GElf_Ehdr *ehdr, GElf_Shdr *symshdr, Elf_Scn *symscn,
 		if (opc == AMD64_JMP32)
 			target[offset] = AMD64_RETQ;
 
-		/* Make sure the linker ignores this relocation. */
-		*info &= ~GELF_R_TYPE(*info);
-		*info |= R_X86_64_NONE;
+		nulrel = R_X86_64_NONE;
 		break;
 	default:
 		errx(1, "unhandled machine type 0x%x", ehdr->e_machine);
 	}
+
+	/* Make sure the linker ignores this relocation. */
+	*info = GELF_R_INFO(0UL, nulrel);
 
 	LOG("updated relocation for %s at 0x%lx", symname, offset - 1);
 
@@ -500,7 +502,7 @@ process_obj(const char *obj)
 	struct probe_list plist;
 	GElf_Ehdr ehdr;
 	GElf_Shdr shdr;
-	struct probe_instance *inst, *tmp;
+	struct probe_instance *inst;
 	Elf_Scn *scn, *datarelscn, *instscn, *instrelscn, *datascn, *symscn;
 	Elf *e;
 	char *objpath;
@@ -573,10 +575,10 @@ process_obj(const char *obj)
 		errx(1, "failed to resolve %s: %s", obj, strerror(errno));
 
 	ndx = 0;
-	SLIST_FOREACH_SAFE(inst, &plist, next, tmp) {
+	while ((inst = SLIST_FIRST(&plist)) != NULL) {
 		record_instance(e, &ehdr, symscn, datascn, datarelscn,
 		    instrelscn, inst, ndx++, objpath);
-		SLIST_REMOVE(&plist, inst, probe_instance, next);
+		SLIST_REMOVE_HEAD(&plist, next);
 		free(inst);
 	}
 
